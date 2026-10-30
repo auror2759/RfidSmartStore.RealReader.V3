@@ -17,6 +17,10 @@ namespace RfidSmartStore.Local
         private readonly Kl9007uReader reader;
         private readonly string webRoot;
         private readonly int port;
+        private readonly object paymentSync = new object();
+        private string pendingPaymentToken = string.Empty;
+        private long pendingPaymentCents;
+        private DateTime pendingPaymentExpiresAt = DateTime.MinValue;
         private TcpListener listener;
         private Thread listenerThread;
         private volatile bool running;
@@ -140,9 +144,47 @@ namespace RfidSmartStore.Local
                 Dictionary<string, object> member = repository.Recharge(Required(body, "epc", "请先刷会员卡"), MoneyToCents(body, "amount"));
                 SendJson(stream, 200, new Dictionary<string, object> { { "ok", true }, { "message", "充值成功" }, { "member", MemberDto(member) } }); return;
             }
+            if (request.Method == "POST" && path == "/api/payment/prepare")
+            {
+                long amountCents = MoneyToCents(body, "amount");
+                string token = Guid.NewGuid().ToString("N");
+                lock (paymentSync)
+                {
+                    pendingPaymentToken = token;
+                    pendingPaymentCents = amountCents;
+                    pendingPaymentExpiresAt = DateTime.Now.AddMinutes(10);
+                }
+                SendJson(stream, 200, new Dictionary<string, object> { { "ok", true }, { "message", "应收金额已锁定，请刷会员卡" }, { "paymentToken", token }, { "amount", CentsToMoney(amountCents) } }); return;
+            }
+            if (request.Method == "POST" && path == "/api/payment/cancel")
+            {
+                lock (paymentSync)
+                {
+                    pendingPaymentToken = string.Empty;
+                    pendingPaymentCents = 0;
+                    pendingPaymentExpiresAt = DateTime.MinValue;
+                }
+                SendOk(stream, "本笔收银已取消"); return;
+            }
             if (request.Method == "POST" && path == "/api/payment")
             {
-                Dictionary<string, object> member = repository.PayFromBalance(Required(body, "epc", "请先刷会员卡"), MoneyToCents(body, "amount"));
+                string epc = Required(body, "epc", "请先刷会员卡");
+                string token = Required(body, "paymentToken", "请先设置并锁定应收金额");
+                Dictionary<string, object> member;
+                lock (paymentSync)
+                {
+                    if (string.IsNullOrEmpty(pendingPaymentToken) || !string.Equals(token, pendingPaymentToken, StringComparison.Ordinal)) throw new InvalidOperationException("本笔应收金额无效，请重新设置金额");
+                    if (DateTime.Now > pendingPaymentExpiresAt)
+                    {
+                        pendingPaymentToken = string.Empty;
+                        pendingPaymentCents = 0;
+                        throw new InvalidOperationException("本笔应收金额已超时，请重新设置");
+                    }
+                    member = repository.PayFromBalance(epc, pendingPaymentCents);
+                    pendingPaymentToken = string.Empty;
+                    pendingPaymentCents = 0;
+                    pendingPaymentExpiresAt = DateTime.MinValue;
+                }
                 Dictionary<string, object> dto = MemberDto(member); dto["paymentNo"] = member["payment_no"]; dto["paid"] = CentsToMoney(Convert.ToInt64(member["paid_cents"]));
                 SendJson(stream, 200, new Dictionary<string, object> { { "ok", true }, { "message", "余额支付成功" }, { "member", dto } }); return;
             }

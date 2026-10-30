@@ -58,7 +58,7 @@ namespace RfidSmartStore.Local
             if (IsConnected) return;
             int index = -1;
             int rc = 0x30;
-            string[] ports = SerialPort.GetPortNames();
+            string[] ports = GetReaderPortsFirst(SerialPort.GetPortNames());
             byte[] baudCodes = new byte[] { 5, 4, 2, 1, 0 }; // 115200、57600、38400、19200、9600
             string connectedPort = string.Empty;
             int connectedBaud = 0;
@@ -70,6 +70,10 @@ namespace RfidSmartStore.Local
                 {
                     address = 0xFF;
                     index = -1;
+                    lock (sync)
+                    {
+                        error = "正在连接 " + ports[p] + " / " + BaudCodeToRate(baudCodes[b]) + "bps";
+                    }
                     rc = StaticClassReaderB.OpenComPort(portNumber, ref address, baudCodes[b], ref index);
                     if (rc == 0)
                     {
@@ -250,6 +254,37 @@ namespace RfidSmartStore.Local
             if (code == 4) return 57600;
             if (code == 5) return 115200;
             return 0;
+        }
+
+        private static string[] GetReaderPortsFirst(string[] availablePorts)
+        {
+            if (availablePorts == null || availablePorts.Length == 0) return new string[0];
+
+            // This KL9007U is installed as CH340 (COM4). The vendor DLL may block when
+            // handed Bluetooth virtual ports, so never scan COM5/COM6 on this machine.
+            string configuredPort = Environment.GetEnvironmentVariable("RFID_READER_PORT");
+            if (string.IsNullOrEmpty(configuredPort)) configuredPort = "COM4";
+            for (int i = 0; i < availablePorts.Length; i++)
+            {
+                if (string.Equals(availablePorts[i], configuredPort, StringComparison.OrdinalIgnoreCase))
+                {
+                    return new string[] { availablePorts[i] };
+                }
+            }
+
+            string[] ordered = (string[])availablePorts.Clone();
+            Array.Sort(ordered, ComparePortNames);
+            return ordered;
+        }
+
+        private static int ComparePortNames(string left, string right)
+        {
+            int leftNumber;
+            int rightNumber;
+            bool leftOk = int.TryParse((left ?? string.Empty).Replace("COM", string.Empty), out leftNumber);
+            bool rightOk = int.TryParse((right ?? string.Empty).Replace("COM", string.Empty), out rightNumber);
+            if (leftOk && rightOk) return leftNumber.CompareTo(rightNumber);
+            return string.Compare(left, right, StringComparison.OrdinalIgnoreCase);
         }
 
         private static byte[] HexToBytes(string hex)
