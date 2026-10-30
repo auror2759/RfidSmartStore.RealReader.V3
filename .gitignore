@@ -1,0 +1,29 @@
+# Visual Studio / MSBuild outputs
+bin/
+obj/
+.vs/
+*.user
+*.suo
+*.exe
+*.pdb
+
+# Local SQLite data (contains member and payment records)
+data/
+*.db
+*.db-wal
+*.db-shm
+
+# Locally supplied native/vendor binaries
+lib/*.dll
+
+# Local screenshots and device photos
+*.png
+*.jpg
+*.jpeg
+*.gif
+*.webp
+
+# OS/editor files
+Thumbs.db
+.DS_Store
+
